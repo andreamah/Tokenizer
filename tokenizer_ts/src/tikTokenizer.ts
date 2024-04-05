@@ -59,7 +59,7 @@ function escapeRegExp(regex: string) {
  */
 export class TikTokenizer {
   private regex?: RegExp;
-  private encoder?: Map<string, number>;
+  private encoder?: MultiLevelMap<number>;
   private decoder?: Map<number, Uint8Array>;
   private specialTokensRegex?: RegExp;
   private specialTokensEncoder?: ReadonlyMap<string, number>;
@@ -94,9 +94,10 @@ export class TikTokenizer {
     specialTokensEncoder: ReadonlyMap<string, number>,
     regexPattern: string
   ): void {
-    this.encoder = new Map<string, number>();
+    // try using a multi-level map so that we don't have to convert Uint8Array to string
+    this.encoder = new MultiLevelMap<number>();
     for (const [key, value] of bpeDict) {
-      this.encoder.set(uint8ArrayToString(key), value);
+      this.encoder.set(key, value);
     }
     this.regex = new RegExp(regexPattern, "gu");
     this.specialTokensRegex = new RegExp(
@@ -210,7 +211,7 @@ export class TikTokenizer {
       } else {
         // cache miss
         const bytes = this.textEncoder.encode(match[0]);
-        const token = this.encoder?.get(uint8ArrayToString(bytes));
+        const token = this.encoder?.get(bytes);
         if (token !== undefined) {
           tokenIds.push(token);
           this.cache.set(match[0], [token]);
@@ -225,6 +226,7 @@ export class TikTokenizer {
 
   private encodeTrimSuffixByIndex(
     text: string,
+    // Switching to Uint8Array/Uint32Array buffer may be faster?
     tokenIds: number[],
     start: number,
     end: number,
@@ -233,20 +235,28 @@ export class TikTokenizer {
     encodeLength: number
   ): { tokenCount: number; encodeLength: number } {
     let match: RegExpMatchArray | null | undefined;
+     // Maybe better to use for of instead of creating the array?
     const matches = Array.from(
       text.substring(start, end).matchAll(this.regex!)
     );
+
+    let piece: string;
+    let bytes: Uint8Array;
+    let token: number | undefined;
+    let tokens: number[] | undefined;
+    let remainingTokens: number = 0;
+
     for (var i = 0; i < matches.length; i++) {
       match = matches[i];
-      const piece = match[0];
+      piece = match[0];
       if (this.cache.has(piece)) {
-        let tokens = this.cache.get(piece);
+        tokens = this.cache.get(piece);
         if (tokenCount + tokens!.length <= maxTokenCount) {
           tokenCount += tokens!.length;
           encodeLength += piece.length;
           tokenIds.push(...tokens!);
         } else {
-          let remainingTokens = maxTokenCount - tokenCount;
+          remainingTokens = maxTokenCount - tokenCount;
           tokenCount += remainingTokens;
           encodeLength += piece.length;
           tokenIds.push(...tokens!.slice(0, remainingTokens));
@@ -254,8 +264,8 @@ export class TikTokenizer {
         }
       } else {
         // cache miss
-        const bytes = this.textEncoder.encode(piece);
-        const token = this.encoder!.get(uint8ArrayToString(bytes));
+         bytes = this.textEncoder.encode(piece);
+         token = this.encoder!.get(bytes);
         if (token !== undefined) {
           this.cache.set(piece, [token]);
           if (tokenCount + 1 <= maxTokenCount) {
@@ -490,4 +500,38 @@ export class TikTokenizer {
 
     return this.textDecoder.decode(new Uint8Array(decoded));
   }
+}
+
+
+class MultiLevelMap<T> {
+  public map: Map<number, (MapChainedValue<T>|T)> = new Map<number, (MapChainedValue<T>|T)>();
+
+  public get(key: Uint8Array): T|undefined {
+    // ...
+    return undefined;
+  }
+
+  public set(key: Uint8Array, value: T) {
+    // ...
+  }
+
+  public size(): number {
+    // TODO...
+    return 0;
+  }
+}
+
+interface MapChainedValue<T> {
+  // used to denote that the array continues, but can also terminate
+
+  // 1 -> 2 -> 3 -> 4 -> 5
+  // vs
+  // 1 -> 2 -> 3
+
+  // at 2, we would have 
+  // chainedValue = 3 -> 4 -> 5
+  // endValue = 3
+  // to specify that 3 can be an end point, but it can also carry on the chain
+  chainedValue: MultiLevelMap<T>;
+  endValue: T;
 }
